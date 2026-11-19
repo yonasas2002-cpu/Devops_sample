@@ -61,7 +61,7 @@ jobs:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
           EC2_KEY: ${{ secrets.EC2_KEY }}
-          EC2_APP_DIR: ${{ secrets.EC2_APP_DIR || '/home/ec2-user/devops_sample' }}
+          EC2_APP_DIR: ${{ vars.EC2_APP_DIR || '/home/ec2-user/devops_sample' }}
         run: |
           printf '%s' "$EC2_USER" | od -An -c
           # strip hidden spaces or newlines from the secrets
