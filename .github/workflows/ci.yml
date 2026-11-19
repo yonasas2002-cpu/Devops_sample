@@ -1,26 +1,27 @@
 name: build-and-lint
 
-# triggers: define when this workflow should run
-# trigger on push to these branches
 on:
   push:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
 
-    # define a job (multiple jobs also)
 jobs:
   build-and-lint:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
 
       - name: Install backend dependencies
         working-directory: server
@@ -46,42 +47,48 @@ jobs:
 
   deploy:
     needs: build-and-lint
-    if: github.event_name == 'push'
+    # deploy only when main is pushed, not dev or pull requests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # never run two deploys at the same time
+    concurrency:
+      group: deploy-ec2
+      cancel-in-progress: false
+
     steps:
-      - name: Checkout (optional)
-        uses: actions/checkout@v4
-
-      - name: Add EC2 host to known_hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-
-      - name: Write SSH key
-        run: |
-          echo "${EC2_KEY}" > ec2_key.pem
-          chmod 600 ec2_key.pem
-        env:
-          EC2_KEY: ${{ secrets.EC2_KEY }}
-
-      - name: Deploy on EC2 (git pull + docker compose up -d --build)
+      - name: Deploy to EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_KEY: ${{ secrets.EC2_KEY }}
           EC2_APP_DIR: ${{ vars.EC2_APP_DIR || '/home/ec2-user/devops_sample' }}
         run: |
-          ssh -i ec2_key.pem ${EC2_USER}@${EC2_HOST} << EOF
-            set -e
-            cd "${EC2_APP_DIR}"
+          # strip hidden spaces or newlines from the secrets
+          EC2_HOST=$(printf '%s' "$EC2_HOST" | tr -d '[:space:]')
+          EC2_USER=$(printf '%s' "$EC2_USER" | tr -d '[:space:]')
 
-            git fetch --all
-            git reset --hard origin/main
+          test -n "$EC2_HOST" || { echo "EC2_HOST secret is empty"; exit 1; }
+          test -n "$EC2_USER" || { echo "EC2_USER secret is empty"; exit 1; }
 
-            docker compose up -d --build
+          # trust the server's host key
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -T 10 -H "$EC2_HOST" >> ~/.ssh/known_hosts
+          test -s ~/.ssh/known_hosts || { echo "Cannot reach the EC2 host on port 22 (check EC2_HOST and the security group)"; exit 1; }
 
-            docker image prune -f
+          # write the private key with safe permissions from the start
+          install -m 600 /dev/null ~/.ssh/ec2_key.pem
+          printf '%s\n' "$EC2_KEY" > ~/.ssh/ec2_key.pem
 
-            docker compose ps
+          ssh -i ~/.ssh/ec2_key.pem \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            "$EC2_USER@$EC2_HOST" << EOF
+          set -e
+          cd "$EC2_APP_DIR"
+          git fetch --all
+          git reset --hard origin/main
+          docker compose up -d --build
+          docker image prune -f
+          docker compose ps
           EOF
