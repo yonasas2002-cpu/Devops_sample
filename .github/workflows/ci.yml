@@ -69,6 +69,7 @@ jobs:
 
           test -n "$EC2_HOST" || { echo "EC2_HOST secret is empty"; exit 1; }
           test -n "$EC2_USER" || { echo "EC2_USER secret is empty"; exit 1; }
+          test -n "$EC2_KEY"  || { echo "EC2_KEY secret is empty"; exit 1; }
 
           # trust the server's host key
           mkdir -p ~/.ssh
@@ -76,11 +77,18 @@ jobs:
           ssh-keyscan -T 10 -H "$EC2_HOST" >> ~/.ssh/known_hosts
           test -s ~/.ssh/known_hosts || { echo "Cannot reach the EC2 host on port 22 (check EC2_HOST and the security group)"; exit 1; }
 
-          # write the private key with safe permissions from the start
+          # write the private key with safe permissions, removing Windows line endings
           install -m 600 /dev/null ~/.ssh/ec2_key.pem
-          printf '%s\n' "$EC2_KEY" > ~/.ssh/ec2_key.pem
+          printf '%s\n' "$EC2_KEY" | tr -d '\r' > ~/.ssh/ec2_key.pem
+
+          # check the key is valid and show its fingerprint (safe to print)
+          ssh-keygen -y -f ~/.ssh/ec2_key.pem > /tmp/ec2_key.pub \
+            || { echo "EC2_KEY is not a valid private key. Re-paste the whole file, including the BEGIN and END lines."; exit 1; }
+          echo "Key fingerprint:"
+          ssh-keygen -lf /tmp/ec2_key.pub
 
           ssh -i ~/.ssh/ec2_key.pem \
+            -o IdentitiesOnly=yes \
             -o BatchMode=yes \
             -o ConnectTimeout=20 \
             "$EC2_USER@$EC2_HOST" << EOF
