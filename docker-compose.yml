@@ -1,5 +1,4 @@
 #version: '3.8'
-version: '>3.0'
 
 
 # Two services: backend API on 5000, frontend (nginx) on 80
